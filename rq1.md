@@ -534,9 +534,9 @@ def run_rq1_experiment(model, tokenizer, episodes: int, turns: int, num_targets:
 def main():
     parser = argparse.ArgumentParser(description="Run RQ1 Evaluation with Qwen LLM.")
     parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Hugging Face model path")
-    parser.add_argument("--episodes", type=int, default=3, help="Number of seeds (keep low for API limits)")
-    parser.add_argument("--turns", type=int, default=6, help="Number of turns per episode")
-    parser.add_argument("--targets", type=int, default=2, help="Number of targets")
+    parser.add_argument("--episodes", type=int, default=15, help="Number of seeds (15 seeds * 8 targets = 120 episodes)")
+    parser.add_argument("--turns", type=int, default=20, help="Number of turns per episode (default N=20)")
+    parser.add_argument("--targets", type=int, default=8, help="Number of targets (financial architectures)")
     
     # Avoid Jupyter/Kaggle notebook cell crash due to sys.argv conflicts
     import sys
