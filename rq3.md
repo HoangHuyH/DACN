@@ -32,6 +32,13 @@ try:
 except ImportError:
     stats = None
 
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Headless mode safe
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+
 
 # =====================================================================
 # 0. Qwen LLM Query Helpers
@@ -474,10 +481,10 @@ def mcts_cgps_search(env: CTIPoisoningEnv, root_state: np.ndarray, num_simulatio
     return np.array([0, 0, 0])
 
 
-def simulate_episode(model, tokenizer, target_id: int, group: str, policy: str, seed: int) -> Dict[str, Any]:
+def simulate_episode(model, tokenizer, target_id: int, group: str, policy: str, seed: int, turns: int) -> Dict[str, Any]:
     """Simulates an episode under target configurations."""
     phase = "recon" if group == "Recon Poisoning" else "exploit"
-    env = CTIPoisoningEnv(model, tokenizer, max_turns=6, poison_phase=phase)
+    env = CTIPoisoningEnv(model, tokenizer, max_turns=turns, poison_phase=phase)
     
     episode_seed = seed + target_id * 1000 + (200 if policy == "cpa" else 0) + (500 if group == "Recon Poisoning" else 0)
     state, _ = env.reset(seed=episode_seed)
@@ -519,14 +526,14 @@ def simulate_episode(model, tokenizer, target_id: int, group: str, policy: str, 
     }
 
 
-def run_rq3_experiment(model, tokenizer, episodes: int, num_targets: int) -> Dict[str, Any]:
+def run_rq3_experiment(model, tokenizer, episodes: int, turns: int, num_targets: int) -> Dict[str, Any]:
     rows = []
     
     for tgt_id in range(num_targets):
         for seed in range(episodes):
             for grp in ("Recon Poisoning", "Exploit Poisoning"):
                 for pol in ("dream", "cpa"):
-                    rows.append(simulate_episode(model, tokenizer, tgt_id, grp, pol, seed))
+                    rows.append(simulate_episode(model, tokenizer, tgt_id, grp, pol, seed, turns))
                     
     factors = {
         "target_relevance": "mean_relevance",
@@ -547,6 +554,39 @@ def run_rq3_experiment(model, tokenizer, episodes: int, num_targets: int) -> Dic
         "note": "ranking_by_abs_beta = RQ3 answer. Pearson r represents each factor's univariate direction."
     }
     
+    # Generate matplotlib bar plot for standardized betas
+    if plt is not None:
+        try:
+            factor_labels = list(factors.keys())
+            success_betas = [report["effectiveness_success"]["standardized_beta"][f] for f in factor_labels]
+            adoption_betas = [report["effectiveness_adoption"]["standardized_beta"][f] for f in factor_labels]
+            
+            # Replace None with 0 for plotting
+            success_betas = [b if b is not None else 0.0 for b in success_betas]
+            adoption_betas = [b if b is not None else 0.0 for b in adoption_betas]
+            
+            x = np.arange(len(factor_labels))
+            width = 0.35
+            
+            plt.figure(figsize=(10, 6))
+            plt.bar(x - width/2, success_betas, width, label='Attack Success (ASR)', color='#1f77b4')
+            plt.bar(x + width/2, adoption_betas, width, label='Poison Adoption Rate', color='#ff7f0e')
+            
+            plt.axhline(0, color='black', linewidth=0.8, linestyle='-')
+            plt.title("Standardized Beta Coefficients of Poisoning Drivers (RQ3)", fontsize=13, fontweight='bold', pad=15)
+            plt.xlabel("CTI Poisoning Factors", fontsize=11)
+            plt.ylabel("Standardized Beta Weight (Effect Size)", fontsize=11)
+            plt.xticks(x, [f.replace('_', '\n') for f in factor_labels])
+            plt.grid(True, linestyle=':', alpha=0.6)
+            plt.legend(loc="upper right", fontsize=10)
+            plt.tight_layout()
+            
+            plt.savefig("rq3_factor_importance.png", dpi=300)
+            plt.close()
+            print("Graph successfully saved to rq3_factor_importance.png")
+        except Exception as e:
+            print(f"Failed to generate plot: {e}")
+            
     return report
 
 
@@ -557,8 +597,9 @@ def run_rq3_experiment(model, tokenizer, episodes: int, num_targets: int) -> Dic
 def main():
     parser = argparse.ArgumentParser(description="Run RQ3 Evaluation with Qwen LLM.")
     parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Model path")
-    parser.add_argument("--episodes", type=int, default=3, help="Number of seeds")
-    parser.add_argument("--targets", type=int, default=2, help="Number of targets")
+    parser.add_argument("--episodes", type=int, default=15, help="Number of seeds (15 seeds * 8 targets = 120 episodes)")
+    parser.add_argument("--turns", type=int, default=20, help="Number of turns per episode (default N=20)")
+    parser.add_argument("--targets", type=int, default=8, help="Number of targets (financial architectures)")
     
     # Avoid Jupyter/Kaggle notebook cell crash due to sys.argv conflicts
     import sys
@@ -585,9 +626,9 @@ def main():
     # Check background CTI dataset loading status
     temp_env = CTIPoisoningEnv(model=model, tokenizer=tokenizer)
     print(f"Loaded Finance CTI Corpus: {len(temp_env.finance_cti_records)} records.")
-    print(f"Running RQ3 LLM-in-the-loop: {args.targets} targets, {args.episodes} seeds.")
+    print(f"Running RQ3 LLM-in-the-loop: {args.targets} targets, {args.episodes} seeds, {args.turns} turns.")
     
-    report = run_rq3_experiment(model, tokenizer, args.episodes, args.targets)
+    report = run_rq3_experiment(model, tokenizer, args.episodes, args.turns, args.targets)
     
     print("\n--- RQ3 EXPERIMENT REPORT ---")
     print(json.dumps(report, indent=2))

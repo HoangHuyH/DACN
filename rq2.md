@@ -32,6 +32,13 @@ try:
 except ImportError:
     stats = None
 
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Headless mode safe
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+
 
 # =====================================================================
 # 0. Qwen LLM Query Helpers
@@ -442,6 +449,8 @@ def simulate_episode(model, tokenizer, target_id: int, policy: str, seed: int, t
     
     rewards = []
     info = {}
+    pds_history = []
+    fpr_history = []
     
     turn = 0
     while not (terminated or truncated):
@@ -458,6 +467,8 @@ def simulate_episode(model, tokenizer, target_id: int, policy: str, seed: int, t
                 
         state, reward, terminated, truncated, info = env.step(action)
         rewards.append(reward)
+        pds_history.append(info["max_pds"])
+        fpr_history.append(info["max_fpr"])
         
     return {
         "target": target_id,
@@ -472,7 +483,9 @@ def simulate_episode(model, tokenizer, target_id: int, policy: str, seed: int, t
         "undetected_rate": info["stealth_score"] * 100.0,
         "detection_score": info["detection_score"],
         "atmi": info["atmi"],
-        "success": info["max_pds"] >= 0.30 or info["max_fpr"] >= 0.40 or info["cfr"] >= 0.25
+        "success": info["max_pds"] >= 0.30 or info["max_fpr"] >= 0.40 or info["cfr"] >= 0.25,
+        "pds_history": pds_history,
+        "fpr_history": fpr_history
     }
 
 
@@ -512,6 +525,38 @@ def run_rq2_experiment(model, tokenizer, episodes: int, turns: int, num_targets:
     
     report["n_episodes_per_policy"] = len(rows["dream"])
     
+    # Generate matplotlib plot for PDS and FPR over turns comparing dream vs cpa
+    if plt is not None:
+        try:
+            turns_count = len(rows["dream"][0]["pds_history"])
+            x_turns = list(range(1, turns_count + 1))
+            
+            dream_pds_avg = [mean([r["pds_history"][t] for r in rows["dream"]]) for t in range(turns_count)]
+            cpa_pds_avg = [mean([r["pds_history"][t] for r in rows["cpa"]]) for t in range(turns_count)]
+            dream_fpr_avg = [mean([r["fpr_history"][t] for r in rows["dream"]]) for t in range(turns_count)]
+            cpa_fpr_avg = [mean([r["fpr_history"][t] for r in rows["cpa"]]) for t in range(turns_count)]
+            
+            plt.figure(figsize=(10, 6))
+            plt.plot(x_turns, dream_pds_avg, label="DREAM Baseline - Planning Deviation (PDS)", marker='o', color='#1f77b4', linestyle=':', linewidth=2)
+            plt.plot(x_turns, cpa_pds_avg, label="CPA Hybrid RL - Planning Deviation (PDS)", marker='s', color='#ff7f0e', linewidth=2)
+            plt.plot(x_turns, dream_fpr_avg, label="DREAM Baseline - False Positive Rate (FPR)", marker='^', color='#2ca02c', linestyle=':', linewidth=1.5)
+            plt.plot(x_turns, cpa_fpr_avg, label="CPA Hybrid RL - False Positive Rate (FPR)", marker='v', color='#d62728', linewidth=1.5)
+            
+            plt.title("CTI Poisoning Policy Comparison Progression Over Turns (RQ2)", fontsize=13, fontweight='bold', pad=15)
+            plt.xlabel("Turn in Simulation", fontsize=11)
+            plt.ylabel("Metric Score Value (0.0 - 1.0)", fontsize=11)
+            plt.ylim(-0.05, 1.05)
+            plt.xticks(x_turns)
+            plt.grid(True, linestyle=':', alpha=0.6)
+            plt.legend(loc="lower right", fontsize=10)
+            plt.tight_layout()
+            
+            plt.savefig("rq2_metrics_over_time.png", dpi=300)
+            plt.close()
+            print("Graph successfully saved to rq2_metrics_over_time.png")
+        except Exception as e:
+            print(f"Failed to generate plot: {e}")
+            
     return report
 
 
@@ -522,9 +567,9 @@ def run_rq2_experiment(model, tokenizer, episodes: int, turns: int, num_targets:
 def main():
     parser = argparse.ArgumentParser(description="Run RQ2 Evaluation.")
     parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct", help="Model path")
-    parser.add_argument("--episodes", type=int, default=3, help="Number of seeds")
-    parser.add_argument("--turns", type=int, default=6, help="Number of turns per episode")
-    parser.add_argument("--targets", type=int, default=2, help="Number of targets")
+    parser.add_argument("--episodes", type=int, default=15, help="Number of seeds (15 seeds * 8 targets = 120 episodes)")
+    parser.add_argument("--turns", type=int, default=20, help="Number of turns per episode (default N=20)")
+    parser.add_argument("--targets", type=int, default=8, help="Number of targets (financial architectures)")
     
     # Avoid Jupyter/Kaggle notebook cell crash due to sys.argv conflicts
     import sys
