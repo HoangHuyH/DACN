@@ -34,6 +34,13 @@ try:
 except ImportError:
     stats = None
 
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Headless mode safe
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+
 
 # =====================================================================
 # 0. Qwen LLM Query Helpers
@@ -460,6 +467,8 @@ def simulate_episode(model, tokenizer, target_id: int, phase: str, seed: int, tu
     
     total_reward = 0.0
     info = {}
+    pds_history = []
+    fpr_history = []
     
     while not (terminated or truncated):
         # Gọi thuật toán C-GPS + MCTS thực tế để quyết định hành động tối ưu cho DREAM baseline
@@ -467,6 +476,8 @@ def simulate_episode(model, tokenizer, target_id: int, phase: str, seed: int, tu
         
         state, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
+        pds_history.append(info["max_pds"])
+        fpr_history.append(info["max_fpr"])
         
     return {
         "target": target_id,
@@ -482,7 +493,9 @@ def simulate_episode(model, tokenizer, target_id: int, phase: str, seed: int, tu
         "detection_score": info["detection_score"],
         "published": info["published_count"],
         "atmi": info["atmi"],
-        "success": info["max_pds"] >= 0.30 or info["max_fpr"] >= 0.40 or info["cfr"] >= 0.25
+        "success": info["max_pds"] >= 0.30 or info["max_fpr"] >= 0.40 or info["cfr"] >= 0.25,
+        "pds_history": pds_history,
+        "fpr_history": fpr_history
     }
 
 
@@ -524,6 +537,38 @@ def run_rq1_experiment(model, tokenizer, episodes: int, turns: int, num_targets:
     
     report["n_episodes_per_group"] = len(rows["recon"])
     
+    # Generate matplotlib plot for PDS and FPR over turns
+    if plt is not None:
+        try:
+            turns_count = len(rows["recon"][0]["pds_history"])
+            x_turns = list(range(1, turns_count + 1))
+            
+            recon_pds_avg = [mean([r["pds_history"][t] for r in rows["recon"]]) for t in range(turns_count)]
+            exploit_pds_avg = [mean([r["pds_history"][t] for r in rows["exploit"]]) for t in range(turns_count)]
+            recon_fpr_avg = [mean([r["fpr_history"][t] for r in rows["recon"]]) for t in range(turns_count)]
+            exploit_fpr_avg = [mean([r["fpr_history"][t] for r in rows["exploit"]]) for t in range(turns_count)]
+            
+            plt.figure(figsize=(10, 6))
+            plt.plot(x_turns, recon_pds_avg, label="Recon - Planning Deviation (PDS)", marker='o', color='#1f77b4', linewidth=2)
+            plt.plot(x_turns, exploit_pds_avg, label="Exploit - Planning Deviation (PDS)", marker='s', color='#ff7f0e', linewidth=2)
+            plt.plot(x_turns, recon_fpr_avg, label="Recon - False Positive Rate (FPR)", marker='^', color='#2ca02c', linestyle='--', linewidth=1.5)
+            plt.plot(x_turns, exploit_fpr_avg, label="Exploit - False Positive Rate (FPR)", marker='v', color='#d62728', linestyle='--', linewidth=1.5)
+            
+            plt.title("CTI Poisoning Impact and Disruption Progression Over Turns (RQ1)", fontsize=13, fontweight='bold', pad=15)
+            plt.xlabel("Turn in Simulation", fontsize=11)
+            plt.ylabel("Metric Score Value (0.0 - 1.0)", fontsize=11)
+            plt.ylim(-0.05, 1.05)
+            plt.xticks(x_turns)
+            plt.grid(True, linestyle=':', alpha=0.6)
+            plt.legend(loc="lower right", fontsize=10)
+            plt.tight_layout()
+            
+            plt.savefig("rq1_metrics_over_time.png", dpi=300)
+            plt.close()
+            print("Graph successfully saved to rq1_metrics_over_time.png")
+        except Exception as e:
+            print(f"Failed to generate plot: {e}")
+            
     return report
 
 
